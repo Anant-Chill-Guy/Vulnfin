@@ -4,10 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-import platform
 import re
-import shutil
-import sys
 import time
 
 from ..adapters.linux import interface_name
@@ -28,42 +25,6 @@ def read_file(path):
 
 class DiscoveryPlugin:
     def prepare(self, params, config): return params
-
-
-class HostDiscovery(DiscoveryPlugin):
-    manifest = Manifest('recon.host', 'Host inventory', 'host',
-        'Local compute, OS, memory, storage, virtualization and tool availability.',
-        capabilities=('local_inventory',), tools=('lscpu', 'lsblk', 'nvidia-smi'))
-
-    async def run(self, ctx, params):
-        ctx.progress('Collecting host inventory')
-        specs = {'cpu': ['lscpu', '-J'], 'storage': ['lsblk', '-J', '-o', 'NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,MODEL'],
-                 'virtualization_environment': ['systemd-detect-virt'],
-                 'gpu': ['nvidia-smi', '--query-gpu=name,memory.total,driver_version', '--format=csv,noheader']}
-        async def collect(name, cmd):
-            accepted = (0, 1) if name == 'virtualization_environment' else (0,)
-            return name, await ctx.runner.command(cmd, accepted=accepted)
-        results = dict(await asyncio.gather(*(collect(k, v) for k, v in specs.items())))
-        virtual = results['virtualization_environment']
-        if virtual.returncode == 1 and virtual.stdout.strip() != 'none':
-            virtual.status = 'ERROR'
-        meminfo = {}
-        for line in (read_file('/proc/meminfo') or '').splitlines():
-            key, _, value = line.partition(':'); meminfo[key] = value.strip()
-        tools = ('iw', 'ip', 'ethtool', 'rfkill', 'lsusb', 'lspci', 'udevadm', 'bluetoothctl',
-                 'btmgmt', 'tcpdump', 'dumpcap', 'tshark', 'hostapd', 'esptool', 'arduino-cli')
-        data = {'platform': {'system': platform.system(), 'release': platform.release(),
-                'architecture': platform.machine(), 'hostname': platform.node(), 'python': sys.version.split()[0]},
-                'cpu': decoded(results['cpu']), 'memory_proc': meminfo,
-                'uptime_seconds': (read_file('/proc/uptime') or '').split(' ')[0],
-                'storage': decoded(results['storage']),
-                'virtualization_environment': virtual.stdout.strip() if virtual.status == 'OK' else None,
-                'kvm_device_exists': Path('/dev/kvm').exists(),
-                'kvm_current_user_access': os.access('/dev/kvm', os.R_OK | os.W_OK),
-                'gpu_csv': results['gpu'].stdout.strip() if results['gpu'].status == 'OK' else None,
-                'tools': {t: shutil.which(t) for t in tools}}
-        return ctx.observation(self.manifest.id, data,
-            warnings=['Tool presence and device enumeration do not establish functional attack or capture support.'])
 
 
 class HardwareDiscovery(DiscoveryPlugin):
@@ -228,7 +189,7 @@ class WifiDiscovery(DiscoveryPlugin):
                 up = await ctx.runner.command(['ip', 'link', 'set', iface, 'up'], privileged=True)
                 if up.status != 'OK':
                     return ctx.observation(self.manifest.id, {'interface': iface},
-                        warnings=['Run sudo -v, then retry.'], status='ERROR')
+                        warnings=['Could not enable the selected interface.'], status='ERROR')
                 changed = True
             ctx.progress(f'{method.capitalize()} BSS discovery on {iface}')
             result = await self.scan(ctx, iface, method, params['timeout'])
@@ -252,4 +213,4 @@ class WifiDiscovery(DiscoveryPlugin):
             warnings=['Cached results can be stale; last_seen_ms_ago is retained when iw supplies it.'] if method == 'cached' else [])
 
 
-PLUGINS = (HostDiscovery, HardwareDiscovery, NetworkDiscovery, WifiDiscovery)
+PLUGINS = (HardwareDiscovery, NetworkDiscovery, WifiDiscovery)

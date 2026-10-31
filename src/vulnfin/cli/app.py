@@ -5,10 +5,8 @@ import asyncio
 from dataclasses import asdict
 import json
 import math
-import os
 from pathlib import Path
 import re
-import shutil
 import sys
 
 from rich.console import Console
@@ -63,15 +61,12 @@ def parser():
     commands.add_parser('help', help='Show command help').add_argument('path', nargs='*')
     info = commands.add_parser('info', help='Show configured interfaces')
     info.add_argument('-j', '--json', action='store_true', help='Print JSON')
-    auth = commands.add_parser('auth', help='Refresh sudo credentials')
-    auth.add_argument('action', nargs='?', choices=('refresh', 'status'), default='refresh')
     recon = commands.add_parser('recon', help='Discover networks and hardware')
     categories = recon.add_subparsers(dest='kind', required=True)
     for kind, description in (
         ('wifi', 'Find nearby Wi-Fi networks'),
         ('network', 'Show local addresses, routes and neighbours'),
         ('hardware', 'Show connected devices and radio capabilities'),
-        ('host', 'Show system information'),
     ):
         item = categories.add_parser(kind, help=description)
         output_options(item)
@@ -94,6 +89,8 @@ def parser():
     actions = plugins.add_subparsers(dest='action', required=True)
     actions.add_parser('list', help='List modules')
     actions.add_parser('show', help='Show module details').add_argument('id')
+    from .commands import extend_parser
+    extend_parser(p)
     return p
 
 
@@ -187,20 +184,9 @@ async def run(argv):
             table('Interfaces', ('Purpose', 'Interface'),
                   (('Recon', data['interface']), ('Protected', data['protected_interface'])))
         return 0
-    if args.command == 'auth':
-        if os.geteuid() == 0:
-            print('Root access available.')
-            return 0
-        if not shutil.which('sudo'):
-            raise ValueError('sudo not found')
-        if args.action == 'refresh' and not sys.stdin.isatty():
-            raise ValueError('Run sudo -v in an interactive terminal')
-        cmd = ('sudo', '-n', '-v') if args.action == 'status' else ('sudo', '-v')
-        process = await asyncio.create_subprocess_exec(*cmd)
-        code = await process.wait()
-        if code == 0:
-            print('Authenticated.')
-        return code
+    from .commands import extra_command, dispatch_extra
+    if extra_command(args):
+        return await dispatch_extra(args)
     plugins = {plugin.manifest.id: plugin for plugin in discover()}
     if args.command == 'plugins':
         if args.action == 'list':
@@ -265,5 +251,6 @@ def main():
     except KeyboardInterrupt:
         raise SystemExit(130)
     except (ValueError, OSError) as error:
-        errors.print('vulnfin: ' + safe(error), style='red', markup=False)
+        for index, line in enumerate(str(error).splitlines() or ['Operation failed']):
+            errors.print(('vulnfin: ' if index == 0 else '') + safe(line), style='red', markup=False)
         raise SystemExit(1)

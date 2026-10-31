@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vulnfin"
+dynamic = ["version"]
 description = "Hardware-assisted offensive security toolkit"
 requires-python = ">=3.11"
-dependencies = ["rich>=14,<15"]
+dependencies = ["rich>=14,<16", "pyserial>=3.5,<4"]
 
 [project.scripts]
 vulnfin = "vulnfin.cli.app:main"
@@ -14,3 +15,9 @@ vulnfin = "vulnfin.cli.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["vulnfin*"]
+
+[tool.setuptools.package-data]
+vulnfin = ["firmware/agent/*.ino"]
+
+[tool.setuptools.dynamic]
+version = {attr = "vulnfin.__version__"}

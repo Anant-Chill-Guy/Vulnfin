@@ -54,7 +54,7 @@ def wifi_table(aps):
     for ap in sorted(aps, key=order):
         signal = ap.get('signal_dbm')
         rows.append((ap.get('ssid') or '<hidden>', ap['bssid'], ap.get('channel'),
-                     f'{signal} dBm' if signal is not None else '—',
+                     f'{signal:g} dBm' if signal is not None else '—',
                      security_label(ap), review_label(wifi_observations(ap))))
     table('Wi-Fi', ('SSID', 'BSSID', 'Ch', 'Signal', 'Security', 'Review'), rows)
 
@@ -69,22 +69,6 @@ def show_findings(findings):
         console.print('  Evidence: ' + safe('; '.join(finding['evidence'])), markup=False)
         console.print('  Impact: ' + safe(finding['meaning']), markup=False)
         console.print('  Check: ' + safe(finding['verification']), markup=False)
-
-
-def cpu_fields(data):
-    found = {}
-    def visit(rows):
-        for row in rows or []:
-            if isinstance(row, dict):
-                if row.get('field'): found[row['field'].rstrip(':')] = row.get('data')
-                visit(row.get('children'))
-    visit((data or {}).get('lscpu'))
-    return found
-
-
-def memory_gib(value):
-    try: return f'{int(value.split()[0]) / 1024 / 1024:.1f} GiB'
-    except (ValueError, AttributeError, IndexError): return '—'
 
 
 def show_observation(observation, *, mode='summary'):
@@ -107,17 +91,6 @@ def show_observation(observation, *, mode='summary'):
             message = 'No cached networks' if data['method'] == 'cached' else 'No networks found'
             hint = ' · try -A' if data['method'] == 'passive' else ''
             console.print(f"{message} · {data['method']} · {data['interface']}{hint}", markup=False)
-    elif plugin == 'recon.host' and 'platform' in data:
-        cpu = cpu_fields(data.get('cpu'))
-        table('Host', ['Field', 'Value'], [
-            ('System', f"{data['platform'].get('system')} {data['platform'].get('release')}"),
-            ('CPU', cpu.get('Model name')), ('Logical CPUs', cpu.get('CPU(s)')),
-            ('RAM / available', f"{memory_gib(data['memory_proc'].get('MemTotal'))} / {memory_gib(data['memory_proc'].get('MemAvailable'))}"),
-            ('GPU', data.get('gpu_csv')), ('Virtualization / KVM', f"{data.get('virtualization_environment')} / {data.get('kvm_current_user_access')} access")])
-        for field, status in cpu.items():
-            if field.startswith('Vulnerability ') and str(status).lower().startswith('vulnerable'):
-                console.print('CPU: ' + safe(field.removeprefix('Vulnerability ')) + ' · ' + safe(status),
-                              style='yellow', markup=False)
     elif plugin == 'recon.hardware' and 'interfaces' in data:
         physical = [x for x in data['interfaces'] if x.get('wireless') or x.get('driver_raw')]
         table('Interfaces', ['Name', 'Wireless', 'State'], [(x['interface'], x['wireless'], x['operstate']) for x in physical])
@@ -127,12 +100,22 @@ def show_observation(observation, *, mode='summary'):
             table('Serial', ['Port', 'VID:PID'], [(x['port'],
                 f"{x['properties'].get('ID_VENDOR_ID', '?')}:{x['properties'].get('ID_MODEL_ID', '?')}") for x in data['serial_ports']])
     elif plugin == 'recon.network' and 'addresses' in data:
-        table('Local network', ['Interface', 'IPv4', 'IPv6 count'],
+        table('Local network', ['Interface', 'IPv4', 'IPv6'],
             [(x['ifname'], ', '.join(f"{a['local']}/{a['prefixlen']}" for a in x.get('addr_info', []) if a['family'] == 'inet'),
-              sum(a['family'] == 'inet6' for a in x.get('addr_info', []))) for x in data['addresses'] or [] if x['ifname'] != 'lo'])
-        gateways = [f"{r.get('gateway')} via {r.get('dev')}" for r in data.get('routes_v4') or [] if r.get('dst') == 'default']
-        console.print('Default route: ' + safe(', '.join(gateways) or 'none'), markup=False)
-        console.print(f"Neighbour-cache entries: {len(data.get('neighbours') or [])}", markup=False)
+              ', '.join(f"{a['local']}/{a['prefixlen']}" for a in x.get('addr_info', []) if a['family'] == 'inet6'))
+             for x in data['addresses'] or [] if x['ifname'] != 'lo'])
+        defaults = [(family, r.get('gateway') or '—', r.get('dev') or '—')
+                    for family, key in (('IPv4', 'routes_v4'), ('IPv6', 'routes_v6'))
+                    for r in data.get(key) or [] if r.get('dst') == 'default']
+        if defaults:
+            table('Default routes', ['Family', 'Gateway', 'Interface'], defaults)
+        neighbours = data.get('neighbours') or []
+        if neighbours:
+            table('Neighbour cache', ['IP', 'MAC', 'Interface', 'State'],
+                  [(r.get('dst'), r.get('lladdr'), r.get('dev'),
+                    ', '.join(r.get('state', [])) if isinstance(r.get('state'), list) else r.get('state')) for r in neighbours])
+        else:
+            console.print('No neighbour-cache entries.', markup=False)
     elif value.get('status') != 'ERROR':
         print_json(structured(data))
     failures = [c for c in value.get('commands', []) if c.get('status') != 'OK' and not c.get('recovered')]

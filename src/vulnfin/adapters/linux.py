@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import signal
+import sys
 import time
 
 from ..core.models import CommandResult
@@ -20,6 +21,44 @@ class Runner:
     def __init__(self, limit=2 * 1024 * 1024):
         self.limit = limit
         self.results = []
+        self.privilege_lock = asyncio.Lock()
+
+    async def require_privileges(self):
+        if os.geteuid() == 0:
+            return
+        sudo = shutil.which('sudo')
+        if not sudo:
+            raise PermissionError('Administrative access required; sudo is not installed')
+        async with self.privilege_lock:
+            async def check(interactive):
+                argv = [sudo, '--', 'true'] if interactive else [sudo, '-n', '--', 'true']
+                process = await asyncio.create_subprocess_exec(
+                    *argv, stdout=asyncio.subprocess.DEVNULL,
+                    stderr=None if interactive else asyncio.subprocess.DEVNULL,
+                    stdin=None if interactive else asyncio.subprocess.DEVNULL)
+                try:
+                    return await process.wait()
+                except BaseException:
+                    if process.returncode is None:
+                        try:
+                            process.terminate()
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            await asyncio.wait_for(process.wait(), 2)
+                        except asyncio.TimeoutError:
+                            try:
+                                process.kill()
+                            except ProcessLookupError:
+                                pass
+                            await process.wait()
+                    raise
+            if await check(False) == 0:
+                return
+            if not sys.stdin.isatty():
+                raise PermissionError('Administrative access required; run in an interactive terminal or as root')
+            if await check(True) != 0:
+                raise PermissionError('Administrative access was not granted')
 
     async def command(self, argv, timeout=15, privileged=False, accepted=(0,)):
         argv = list(argv)
@@ -60,10 +99,7 @@ class Runner:
                 result.stderr = f'Missing executable: {argv[0]}'
                 return result
             if privileged and os.geteuid() != 0:
-                if not shutil.which('sudo'):
-                    result.status = 'PERMISSION_REQUIRED'
-                    result.stderr = 'sudo is unavailable; the operation requires CAP_NET_ADMIN/root.'
-                    return result
+                await self.require_privileges()
                 actual = ['sudo', '-n', '--'] + argv
             proc = await asyncio.create_subprocess_exec(*actual, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
@@ -81,6 +117,9 @@ class Runner:
             result.status = 'CANCELLED'
             await terminate()
             raise
+        except PermissionError as error:
+            result.status = 'PERMISSION_REQUIRED'
+            result.stderr = str(error)
         except OSError as error:
             result.status = 'ERROR'
             result.stderr = str(error)

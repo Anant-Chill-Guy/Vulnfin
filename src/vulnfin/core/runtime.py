@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from pathlib import Path
 import tomllib
 
 from ..adapters.linux import Runner
+from ..adapters.resources import Resource
 from .models import Observation
 
 
@@ -36,8 +38,6 @@ class Context:
             command = result.summary()
             if result.status != 'OK':
                 command['error'] = result.stderr.strip() or result.status.lower().replace('_', ' ')
-                if result.status == 'PERMISSION_REQUIRED':
-                    command['error'] += ' · run sudo -v, then retry'
             if getattr(result, 'recovered', False):
                 command['recovered'] = True
             commands.append(command)
@@ -52,4 +52,6 @@ async def execute(plugin, params, *, verbose=False):
     params = plugin.prepare(dict(params), config)
     runner = Runner(limit=32 * 1024 * 1024)
     context = Context(runner, config, verbose)
-    return await plugin.run(context, params)
+    lease = Resource('wifi:' + params['interface']) if plugin.manifest.id == 'recon.wifi' else nullcontext()
+    with lease:
+        return await plugin.run(context, params)

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vulnfin"
+description = "Hardware-assisted offensive security toolkit"
+requires-python = ">=3.11"
+dependencies = ["rich>=14,<15"]
+
+[project.scripts]
+vulnfin = "vulnfin.cli.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["vulnfin*"]

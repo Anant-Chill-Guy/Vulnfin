@@ -5,9 +5,11 @@ import asyncio
 from dataclasses import asdict
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 
 from rich.console import Console
 
@@ -77,7 +79,7 @@ def parser():
             item.add_argument('-S', '--ssid', help='Filter results by SSID substring')
             item.add_argument('-B', '--bssid', type=bssid, help='Inspect one BSSID after the scan')
             item.add_argument('-f', '--findings', action='store_true', help='Show networks with security findings')
-    target = commands.add_parser('target', help='Inspect a Wi-Fi target')
+    target = commands.add_parser('target', help='Inspect, select and verify targets')
     actions = target.add_subparsers(dest='action', required=True)
     show = actions.add_parser('show', help='Inspect a BSSID from a scan or saved results')
     show.add_argument('bssid', type=bssid, help='Exact BSSID')
@@ -91,6 +93,10 @@ def parser():
     actions.add_parser('show', help='Show module details').add_argument('id')
     from .commands import extend_parser
     extend_parser(p)
+    from .assess import extend_parser as extend_assessment
+    extend_assessment(p)
+    from .targets import extend_parser as extend_targets
+    extend_targets(p)
     return p
 
 
@@ -104,9 +110,17 @@ def output_path(path):
 
 
 def write_new(path, data):
-    with path.open('x', encoding='utf-8') as stream:
-        json.dump(data, stream, indent=2, ensure_ascii=True)
-        stream.write('\n')
+    fd, temporary = tempfile.mkstemp(prefix='.vulnfin-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(data, stream, indent=2, ensure_ascii=True)
+            stream.write('\n')
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            raise ValueError('Output file already exists: ' + str(path)) from None
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def select_wifi_target(payload, identity):
@@ -176,6 +190,12 @@ async def run(argv):
             current = choices[part]
         current.print_help()
         return 0
+    if args.command == 'assess':
+        from .assess import dispatch
+        return await dispatch(args)
+    if args.command == 'target' and args.action in ('list', 'map', 'select', 'verify'):
+        from .targets import dispatch
+        return await dispatch(args)
     if args.command == 'info':
         data = configuration()['wifi']
         if args.json:

@@ -9,6 +9,9 @@ description = "Hardware-assisted offensive security toolkit"
 requires-python = ">=3.11"
 dependencies = ["rich>=14,<16", "pyserial>=3.5,<4"]
 
+[project.optional-dependencies]
+ble = ["bleak>=3,<4"]
+
 [project.scripts]
 vulnfin = "vulnfin.cli.app:main"
 
